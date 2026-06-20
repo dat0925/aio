@@ -1,5 +1,5 @@
-// supabase/aio-check/index.ts
-// Supabase Edge Function: AIOチェッカー
+// worker/index.js
+// Cloudflare Worker: AIOチェッカー バックエンド
 //
 // 役割:
 //   1. 指定URLのHTMLをサーバー側で取得(CORS制約を回避)
@@ -9,24 +9,26 @@
 //      平易な言葉での所見・推奨施策・競合文脈をJSONで生成
 //
 // デプロイ方法は README.md を参照してください。
-// 必須シークレット: ANTHROPIC_API_KEY (Supabaseダッシュボード > Edge Functions > Secrets で設定)
+// 必須シークレット: ANTHROPIC_API_KEY (Cloudflareダッシュボード > Workers > Settings > Variables で設定)
 
 const ALLOWED_ORIGIN = "*"; // 必要に応じて "https://aio.taskra.jp" に絞ってください
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+    "Access-Control-Allow-Headers": "content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+  };
+}
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
+    headers: { ...corsHeaders(), "Content-Type": "application/json; charset=utf-8" },
   });
 }
 
-function getMeta(html: string, name: string): string | null {
+function getMeta(html, name) {
   const re = new RegExp(
     `<meta[^>]+(?:name|property)=["']${name}["'][^>]+content=["']([^"']*)["']`,
     "i",
@@ -35,7 +37,7 @@ function getMeta(html: string, name: string): string | null {
   return m ? m[1] : null;
 }
 
-function parseStructural(html: string) {
+function parseStructural(html) {
   const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1]?.trim() || null;
   const metaDescription = getMeta(html, "description");
   const ogTitle = getMeta(html, "og:title");
@@ -50,7 +52,7 @@ function parseStructural(html: string) {
   ].map((m) => m[1]);
 
   let hasFAQSchema = false;
-  const schemaTypes: string[] = [];
+  const schemaTypes = [];
   for (const block of jsonLdBlocks) {
     try {
       const parsed = JSON.parse(block);
@@ -92,8 +94,7 @@ function parseStructural(html: string) {
   };
 }
 
-async function getAiFindings(url: string, structural: ReturnType<typeof parseStructural>) {
-  const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
+async function getAiFindings(url, structural, apiKey) {
   if (!apiKey) return null;
 
   const prompt = `あなたはWebサイトの「AIO(AI Optimization)」診断アシスタントです。
@@ -146,8 +147,8 @@ ${structural.bodyTextSample}
 
   const data = await res.json();
   const textBlocks = (data.content || [])
-    .filter((b: { type: string }) => b.type === "text")
-    .map((b: { text: string }) => b.text)
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
     .join("\n");
 
   try {
@@ -158,51 +159,52 @@ ${structural.bodyTextSample}
   }
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
-  }
-  if (req.method !== "POST") {
-    return jsonResponse({ error: "POSTメソッドを使用してください" }, 405);
-  }
-
-  let url: string;
-  try {
-    const body = await req.json();
-    url = body.url;
-  } catch (_e) {
-    return jsonResponse({ error: "リクエストボディが不正です" }, 400);
-  }
-
-  if (!url || !/^https?:\/\//i.test(url)) {
-    return jsonResponse({ error: "有効なURL(http/httpsから始まる)を入力してください" }, 400);
-  }
-
-  let html: string;
-  try {
-    const pageRes = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; AIOChecker/1.0; +https://aio.taskra.jp)" },
-      redirect: "follow",
-    });
-    if (!pageRes.ok) {
-      return jsonResponse({ error: `ページの取得に失敗しました(status: ${pageRes.status})` }, 400);
+export default {
+  async fetch(request, env, _ctx) {
+    if (request.method === "OPTIONS") {
+      return new Response("ok", { headers: corsHeaders() });
     }
-    html = await pageRes.text();
-  } catch (e) {
-    return jsonResponse({ error: `ページの取得中にエラーが発生しました: ${String(e)}` }, 400);
-  }
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "POSTメソッドを使用してください" }, 405);
+    }
 
-  const structural = parseStructural(html);
+    let url;
+    try {
+      const body = await request.json();
+      url = body.url;
+    } catch (_e) {
+      return jsonResponse({ error: "リクエストボディが不正です" }, 400);
+    }
 
-  let aiFindings = null;
-  try {
-    aiFindings = await getAiFindings(url, structural);
-  } catch (e) {
-    aiFindings = { error: `AI診断中にエラーが発生しました: ${String(e)}` };
-  }
+    if (!url || !/^https?:\/\//i.test(url)) {
+      return jsonResponse({ error: "有効なURL(http/httpsから始まる)を入力してください" }, 400);
+    }
 
-  // bodyTextSampleはレスポンスを軽くするため返却時に除外
-  const { bodyTextSample: _omit, ...structuralForClient } = structural;
+    let html;
+    try {
+      const pageRes = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; AIOChecker/1.0; +https://aio.taskra.jp)" },
+        redirect: "follow",
+      });
+      if (!pageRes.ok) {
+        return jsonResponse({ error: `ページの取得に失敗しました(status: ${pageRes.status})` }, 400);
+      }
+      html = await pageRes.text();
+    } catch (e) {
+      return jsonResponse({ error: `ページの取得中にエラーが発生しました: ${String(e)}` }, 400);
+    }
 
-  return jsonResponse({ url, structural: structuralForClient, aiFindings });
-});
+    const structural = parseStructural(html);
+
+    let aiFindings = null;
+    try {
+      aiFindings = await getAiFindings(url, structural, env.ANTHROPIC_API_KEY);
+    } catch (e) {
+      aiFindings = { error: `AI診断中にエラーが発生しました: ${String(e)}` };
+    }
+
+    const { bodyTextSample: _omit, ...structuralForClient } = structural;
+
+    return jsonResponse({ url, structural: structuralForClient, aiFindings });
+  },
+};

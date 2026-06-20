@@ -217,8 +217,7 @@
 
 <script>
   // ===== 設定:デプロイ後に書き換えてください =====
-  const SUPABASE_FUNCTION_URL = "https://sfhtvtcmgueystyuhzvd.supabase.co/functions/v1/aio-check";
-  const SUPABASE_ANON_KEY = "YOUR_SUPABASE_ANON_KEY"; // SupabaseダッシュボードのProject Settings > API から取得
+  const WORKER_URL = "https://aio-check.YOUR-SUBDOMAIN.workers.dev"; // Cloudflareダッシュボードに表示されるWorker URLに置き換える
   // ================================================
 
   const urlInput = document.getElementById('urlInput');
@@ -307,12 +306,10 @@
     setState('<span class="pulse"></span>診断中です。ページを取得してAIが分析しています(数秒〜十数秒かかります)…', 'state-loading');
 
     try{
-      const res = await fetch(SUPABASE_FUNCTION_URL, {
+      const res = await fetch(WORKER_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
         },
         body: JSON.stringify({ url }),
       });
@@ -324,7 +321,7 @@
       setState('', '');
       renderResult(data);
     }catch(e){
-      setState('通信エラーが発生しました。Edge Functionのデプロイ状況・URL設定を確認してください。(' + e + ')', 'state-error');
+      setState('通信エラーが発生しました。Cloudflare Workerのデプロイ状況・URL設定を確認してください。(' + e + ')', 'state-error');
     }finally{
       checkBtn.disabled = false;
     }
