@@ -2,11 +2,16 @@
 
 SiteMeisterに追加する「AIO対策機能(AIに見つけてもらうための診断・改善提案)」の要件定義書とプレゼン用モックアップを格納するリポジトリです。
 
+## 公開URL
+
+https://aio.taskra.jp (GitHub Pages + カスタムドメイン)
+
 ## ファイル構成
 
 ```
-requirements.md      要件定義書(本体)
-mockup/index.html    プレゼン・開発参照用モックアップ(軽量版+詳細版、単一HTMLファイル)
+requirements.md   要件定義書(本体)
+index.html        プレゼン・開発参照用モックアップ(軽量版+詳細版、単一HTMLファイル)
+CNAME             GitHub Pagesのカスタムドメイン設定(aio.taskra.jp)
 ```
 
 ## requirements.md について
@@ -17,12 +22,11 @@ mockup/index.html    プレゼン・開発参照用モックアップ(軽量版+
   - もしくは `pandoc requirements.md -o requirements.docx` (Pandocが使える環境であれば)
 - PowerPoint化する場合は、各章(`##`見出し)を1スライドの単位として転記すると流用しやすい構成にしています。
 
-## mockup/index.html について
+## index.html について
 
-- ブラウザで直接開けば動作します(`mockup/index.html` をダブルクリック、またはブラウザにドラッグ&ドロップ)。
+- ブラウザで直接開けば動作します。公開後は https://aio.taskra.jp でも閲覧できます。
 - 画面上部のタブで「①管理画面ウィジェット(軽量版)」「②CRMエージェント統合画面(詳細版)」を切り替えられます。
 - 「解説モード」をONにすると、各要素の設計意図を示す注釈が表示されます。プレゼン時はOFF、社内説明時はONを想定しています。
-- GitHub Pagesを有効化すれば、URLでそのまま共有・閲覧できるようになります(未設定の場合は別途対応可能です)。
 
 ## ステータス
 
