@@ -310,11 +310,35 @@
     return 'warn';
   }
 
-  function renderResult(data){
+  function renderStructural(data){
     results.classList.add('show');
     document.getElementById('resultUrl').textContent = data.url;
 
-    const ai = data.aiFindings;
+    document.getElementById('gaugeArc').setAttribute('stroke-dashoffset', 314);
+    document.getElementById('gaugeStatus').textContent = '構造解析 完了';
+    document.getElementById('gaugeStatus').className = 'gauge-status';
+    document.getElementById('gaugeScore').textContent = '-';
+    document.getElementById('summaryText').innerHTML = '<span class="pulse"></span>AIが所見・推奨施策を作成しています(10〜20秒ほどかかります)…';
+    document.getElementById('aiDisabledNote').style.display = 'none';
+
+    const st = data.structural || {};
+    const grid = document.getElementById('structGrid');
+    const rows = [
+      ['title', st.title || '(なし)'],
+      ['meta description', st.metaDescription || '(なし)'],
+      ['OGP title', st.ogTitle || '(なし)'],
+      ['canonical', st.canonical || '(なし)'],
+      ['h1の数', st.h1Count],
+      ['FAQ構造化データ', st.hasFAQSchema ? 'あり' : 'なし'],
+      ['検出schema.org型', (st.schemaTypes||[]).join(', ') || '(なし)'],
+      ['価格情報の記載', st.hasPricingText ? 'あり' : 'なし'],
+      ['FAQ的キーワード', st.faqKeywordHit ? 'あり' : 'なし'],
+      ['本文文字数(概算)', st.bodyTextLength],
+    ];
+    grid.innerHTML = rows.map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  }
+
+  function applyAiFindings(ai){
     const hasAi = ai && !ai.error && !ai.raw;
 
     if(hasAi){
@@ -348,28 +372,35 @@
         document.getElementById('competitiveCard').style.display = '';
         document.getElementById('competitiveText').textContent = ai.competitive_note;
       }
-      document.getElementById('aiDisabledNote').style.display = 'none';
     } else {
-      document.getElementById('gaugeStatus').textContent = '構造データのみ';
-      document.getElementById('summaryText').textContent = 'AI所見は利用できませんでした。下の構造データを参考にしてください。';
-      document.getElementById('aiDisabledNote').style.display = '';
+      showAiUnavailable((ai && ai.error) ? ai.error : 'AI所見は利用できませんでした。下の構造データを参考にしてください。');
     }
+  }
 
-    const st = data.structural || {};
-    const grid = document.getElementById('structGrid');
-    const rows = [
-      ['title', st.title || '(なし)'],
-      ['meta description', st.metaDescription || '(なし)'],
-      ['OGP title', st.ogTitle || '(なし)'],
-      ['canonical', st.canonical || '(なし)'],
-      ['h1の数', st.h1Count],
-      ['FAQ構造化データ', st.hasFAQSchema ? 'あり' : 'なし'],
-      ['検出schema.org型', (st.schemaTypes||[]).join(', ') || '(なし)'],
-      ['価格情報の記載', st.hasPricingText ? 'あり' : 'なし'],
-      ['FAQ的キーワード', st.faqKeywordHit ? 'あり' : 'なし'],
-      ['本文文字数(概算)', st.bodyTextLength],
-    ];
-    grid.innerHTML = rows.map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  function showAiUnavailable(message){
+    document.getElementById('gaugeStatus').textContent = '構造データのみ';
+    document.getElementById('gaugeStatus').className = 'gauge-status';
+    document.getElementById('summaryText').textContent = '構造データの取得は完了しました。AI所見の生成には失敗しています。';
+    const note = document.getElementById('aiDisabledNote');
+    note.textContent = message;
+    note.style.display = '';
+  }
+
+  async function fetchJson(path, body, timeoutMs){
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try{
+      const res = await fetch(WORKER_URL + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Access-Hash': accessHash },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      const data = await res.json();
+      return { ok: res.ok, status: res.status, data };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async function runCheck(){
@@ -378,26 +409,40 @@
 
     checkBtn.disabled = true;
     results.classList.remove('show');
-    setState('<span class="pulse"></span>診断中です。ページを取得してAIが分析しています(数秒〜十数秒かかります)…', 'state-loading');
+    setState('<span class="pulse"></span>ページを取得して構造を解析しています…', 'state-loading');
 
+    let structuralData;
     try{
-      const res = await fetch(WORKER_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Access-Hash': accessHash,
-        },
-        body: JSON.stringify({ url }),
-      });
-      const data = await res.json();
-      if(!res.ok){
-        setState((data && data.error) ? data.error : '診断に失敗しました。', 'state-error');
+      const r = await fetchJson('/structural', { url }, 15000);
+      if(!r.ok){
+        setState((r.data && r.data.error) ? r.data.error : '構造解析に失敗しました。', 'state-error');
+        checkBtn.disabled = false;
         return;
       }
+      structuralData = r.data;
       setState('', '');
-      renderResult(data);
+      renderStructural(structuralData);
     }catch(e){
-      setState('通信エラーが発生しました。Cloudflare Workerのデプロイ状況・URL設定を確認してください。(' + e + ')', 'state-error');
+      const msg = (e && e.name === 'AbortError')
+        ? 'ページの取得がタイムアウトしました。対象サイトが重いか、応答していない可能性があります。'
+        : '通信エラーが発生しました。Cloudflare Workerのデプロイ状況・URL設定を確認してください。(' + e + ')';
+      setState(msg, 'state-error');
+      checkBtn.disabled = false;
+      return;
+    }
+
+    try{
+      const r2 = await fetchJson('/ai', { url, structural: structuralData.structural }, 30000);
+      if(!r2.ok){
+        showAiUnavailable((r2.data && r2.data.error) ? r2.data.error : 'AI所見の生成に失敗しました。');
+      }else{
+        applyAiFindings(r2.data.aiFindings);
+      }
+    }catch(e){
+      const msg = (e && e.name === 'AbortError')
+        ? 'AI所見の生成がタイムアウトしました。もう一度お試しください。'
+        : ('AI所見の取得中に通信エラーが発生しました。(' + e + ')');
+      showAiUnavailable(msg);
     }finally{
       checkBtn.disabled = false;
     }

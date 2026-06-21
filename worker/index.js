@@ -3,13 +3,16 @@
 //
 // 役割:
 //   0. アクセスコード(ハッシュ照合)による簡易認証
-//   1. 指定URLのHTMLをサーバー側で取得(CORS制約を回避)
-//   2. タイトル・meta description・OGP・canonical・構造化データ(JSON-LD)・
-//      見出し構成などを軽量パースし、構造的シグナルとして評価
-//   3. Claude API(web_search有効)に構造情報+本文抜粋を渡し、
-//      平易な言葉での所見・推奨施策・競合文脈をJSONで生成
+//   POST /structural … 指定URLのHTMLをサーバー側で取得(CORS制約を回避)し、
+//      title/meta description/OGP/canonical/構造化データ(JSON-LD)/見出し構成
+//      などを軽量パースして即座に返す(高速・タイムアウトしにくい)
+//   POST /ai … /structural のレスポンスをそのまま渡すと、Claude API(web_search有効)
+//      で所見・推奨施策・競合文脈をJSONで生成して返す(時間がかかる処理を分離)
 //
-// デプロイ方法は README.md を参照してください。
+// 2段階に分けている理由: ページ取得+AI生成を1リクエストにまとめると、
+// モバイル回線等でタイムアウトしやすく「全部やり直し」になってしまうため。
+// 構造データは即表示し、AI所見は後から差し込む設計にしている。
+//
 // 必須シークレット:
 //   ANTHROPIC_API_KEY  - Claude APIキー
 //   CHECKER_PIN_HASH    - アクセスコードのSHA-256ハッシュ(16進数文字列)。
@@ -98,7 +101,7 @@ function parseStructural(html) {
   };
 }
 
-async function getAiFindings(url, structural, apiKey) {
+async function getAiFindings(url, structural, apiKey, signal) {
   if (!apiKey) return null;
 
   const prompt = `あなたはWebサイトの「AIO(AI Optimization)」診断アシスタントです。
@@ -142,6 +145,7 @@ ${structural.bodyTextSample}
       tools: [{ type: "web_search_20250305", name: "web_search" }],
       messages: [{ role: "user", content: prompt }],
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -160,6 +164,86 @@ ${structural.bodyTextSample}
     return JSON.parse(cleaned);
   } catch (_e) {
     return { raw: textBlocks };
+  }
+}
+
+async function handleStructural(request) {
+  let url;
+  try {
+    const body = await request.json();
+    url = body.url;
+  } catch (_e) {
+    return jsonResponse({ error: "リクエストボディが不正です" }, 400);
+  }
+
+  if (!url || !/^https?:\/\//i.test(url)) {
+    return jsonResponse({ error: "有効なURL(http/httpsから始まる)を入力してください" }, 400);
+  }
+
+  let html;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000); // 10秒でタイムアウト
+    let pageRes;
+    try {
+      pageRes = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; AIOChecker/1.0; +https://aio.taskra.jp)" },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!pageRes.ok) {
+      return jsonResponse({ error: `ページの取得に失敗しました(status: ${pageRes.status})` }, 400);
+    }
+    html = await pageRes.text();
+  } catch (e) {
+    const timedOut = e && e.name === "AbortError";
+    return jsonResponse(
+      { error: timedOut ? "ページの取得がタイムアウトしました(10秒)。対象サイトが重い可能性があります。" : `ページの取得中にエラーが発生しました: ${String(e)}` },
+      400,
+    );
+  }
+
+  const structural = parseStructural(html);
+  return jsonResponse({ url, structural });
+}
+
+async function handleAi(request, env) {
+  let body;
+  try {
+    body = await request.json();
+  } catch (_e) {
+    return jsonResponse({ error: "リクエストボディが不正です" }, 400);
+  }
+
+  const { url, structural } = body;
+  if (!url || !structural) {
+    return jsonResponse({ error: "url・structuralが必要です(先に/structuralを呼んでください)" }, 400);
+  }
+
+  const apiKey = env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return jsonResponse({ aiFindings: null });
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000); // 25秒でタイムアウト
+  try {
+    const aiFindings = await getAiFindings(url, structural, apiKey, controller.signal);
+    return jsonResponse({ aiFindings });
+  } catch (e) {
+    const timedOut = e && e.name === "AbortError";
+    return jsonResponse({
+      aiFindings: {
+        error: timedOut
+          ? "AI診断がタイムアウトしました(25秒)。もう一度お試しください。"
+          : `AI診断中にエラーが発生しました: ${String(e)}`,
+      },
+    });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -182,43 +266,14 @@ export default {
     }
     // -------------------------------------------
 
-    let url;
-    try {
-      const body = await request.json();
-      url = body.url;
-    } catch (_e) {
-      return jsonResponse({ error: "リクエストボディが不正です" }, 400);
+    const { pathname } = new URL(request.url);
+
+    if (pathname === "/structural") {
+      return handleStructural(request);
     }
-
-    if (!url || !/^https?:\/\//i.test(url)) {
-      return jsonResponse({ error: "有効なURL(http/httpsから始まる)を入力してください" }, 400);
+    if (pathname === "/ai") {
+      return handleAi(request, env);
     }
-
-    let html;
-    try {
-      const pageRes = await fetch(url, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; AIOChecker/1.0; +https://aio.taskra.jp)" },
-        redirect: "follow",
-      });
-      if (!pageRes.ok) {
-        return jsonResponse({ error: `ページの取得に失敗しました(status: ${pageRes.status})` }, 400);
-      }
-      html = await pageRes.text();
-    } catch (e) {
-      return jsonResponse({ error: `ページの取得中にエラーが発生しました: ${String(e)}` }, 400);
-    }
-
-    const structural = parseStructural(html);
-
-    let aiFindings = null;
-    try {
-      aiFindings = await getAiFindings(url, structural, env.ANTHROPIC_API_KEY);
-    } catch (e) {
-      aiFindings = { error: `AI診断中にエラーが発生しました: ${String(e)}` };
-    }
-
-    const { bodyTextSample: _omit, ...structuralForClient } = structural;
-
-    return jsonResponse({ url, structural: structuralForClient, aiFindings });
+    return jsonResponse({ error: "不明なエンドポイントです(/structural または /ai を使用してください)" }, 404);
   },
 };
