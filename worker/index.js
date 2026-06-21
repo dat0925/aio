@@ -2,6 +2,7 @@
 // Cloudflare Worker: AIOチェッカー バックエンド
 //
 // 役割:
+//   0. アクセスコード(ハッシュ照合)による簡易認証
 //   1. 指定URLのHTMLをサーバー側で取得(CORS制約を回避)
 //   2. タイトル・meta description・OGP・canonical・構造化データ(JSON-LD)・
 //      見出し構成などを軽量パースし、構造的シグナルとして評価
@@ -9,14 +10,17 @@
 //      平易な言葉での所見・推奨施策・競合文脈をJSONで生成
 //
 // デプロイ方法は README.md を参照してください。
-// 必須シークレット: ANTHROPIC_API_KEY (Cloudflareダッシュボード > Workers > Settings > Variables で設定)
+// 必須シークレット:
+//   ANTHROPIC_API_KEY  - Claude APIキー
+//   CHECKER_PIN_HASH    - アクセスコードのSHA-256ハッシュ(16進数文字列)。
+//                          平文のアクセスコードはどこにも保存しない。
 
 const ALLOWED_ORIGIN = "*"; // 必要に応じて "https://aio.taskra.jp" に絞ってください
 
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-    "Access-Control-Allow-Headers": "content-type",
+    "Access-Control-Allow-Headers": "content-type, x-access-hash",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
 }
@@ -167,6 +171,16 @@ export default {
     if (request.method !== "POST") {
       return jsonResponse({ error: "POSTメソッドを使用してください" }, 405);
     }
+
+    // ---- アクセスコード認証(ハッシュ照合) ----
+    const expectedHash = env.CHECKER_PIN_HASH;
+    if (expectedHash) {
+      const providedHash = request.headers.get("x-access-hash") || "";
+      if (providedHash.toLowerCase() !== expectedHash.toLowerCase()) {
+        return jsonResponse({ error: "アクセスコードが正しくありません" }, 401);
+      }
+    }
+    // -------------------------------------------
 
     let url;
     try {

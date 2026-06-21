@@ -2,6 +2,8 @@
 
 任意のURLを入力すると、「ChatGPTやGoogleのAI検索に紹介・引用されやすいページか」を実際に診断する単体ツールです。SiteMeister・CRMエージェントとの連携は前提にしていません。
 
+アクセスコード(ハッシュ照合)による簡易認証付きです。第三者による無断利用・Claude API費用の不正消費を防ぐため、フロント・バックエンド両方でコードを検証しています。
+
 ## 公開URL
 
 https://aio.taskra.jp
@@ -39,7 +41,9 @@ CLIを使わない前提の手順です。
 2. 左メニュー「Workers & Pages」→「Create」→「Create Worker」
 3. 名前を `aio-check` などにして「Deploy」(まず空のWorkerを作成)
 4. 作成後「Edit code」を開き、`worker/index.js` の中身をすべて貼り付けて「Deploy」
-5. Workerの「Settings → Variables and Secrets」で `ANTHROPIC_API_KEY` をSecretとして追加(Claude APIキー)
+5. Workerの「Settings → Variables and Secrets」で以下2つをSecretとして追加
+   - `ANTHROPIC_API_KEY`(Claude APIキー)
+   - `CHECKER_PIN_HASH`(アクセスコードのSHA-256ハッシュ。平文のコードは保存しない。値は`python3 -c "import hashlib;print(hashlib.sha256('コード'.encode()).hexdigest())"`等で算出)
 6. 画面に表示されるWorker URL(例: `https://aio-check.あなたのサブドメイン.workers.dev`)をコピー
 7. `index.html` 内の `WORKER_URL` をそのURLに書き換えて保存・再PUSH
 

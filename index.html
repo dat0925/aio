@@ -136,6 +136,32 @@
 
   footer{ text-align:center; margin-top:50px; font-size:11.5px; color:var(--ink-faint); }
 
+  /* ---------- アクセスコードゲート ---------- */
+  .gate{
+    min-height:100vh; display:flex; align-items:center; justify-content:center;
+    padding:20px;
+  }
+  .gate-card{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:36px 30px; max-width:340px; width:100%; text-align:center;
+  }
+  .gate-card .brand{ display:block; margin-bottom:18px; }
+  .gate-card h2{ font-family:var(--serif); font-size:17px; margin:0 0 8px; }
+  .gate-card p{ font-size:12.5px; color:var(--ink-soft); margin:0 0 20px; line-height:1.7; }
+  .gate-card input{
+    width:100%; font-family:var(--sans); font-size:15px; letter-spacing:.1em;
+    border:1px solid var(--line); border-radius:10px; padding:13px 14px;
+    background:var(--surface-soft); color:var(--ink); text-align:center;
+  }
+  .gate-card input:focus{ outline:2px solid var(--accent); outline-offset:1px; }
+  .gate-card button{
+    width:100%; margin-top:12px;
+    font-family:var(--sans); font-weight:700; font-size:14px;
+    background:var(--accent); color:#fff; border:none; border-radius:10px;
+    padding:13px; cursor:pointer;
+  }
+  .gate-error{ font-size:12px; color:var(--risk); margin-top:12px; min-height:1em; }
+
   @media (max-width:520px){
     .struct-grid{ grid-template-columns:1fr; }
     .struct-grid dt{ margin-top:6px; }
@@ -143,6 +169,19 @@
 </style>
 </head>
 <body>
+
+<div class="gate" id="gate">
+  <div class="gate-card">
+    <div class="brand">AIO CHECKER</div>
+    <h2>アクセスコードを入力してください</h2>
+    <p>この先は限定公開のツールです。</p>
+    <input type="password" id="gateInput" autocomplete="off" autocapitalize="off">
+    <button id="gateBtn">進む</button>
+    <div class="gate-error" id="gateError"></div>
+  </div>
+</div>
+
+<div id="mainApp" style="display:none;">
 <div class="wrap">
   <header>
     <div class="brand">AIO CHECKER</div>
@@ -214,11 +253,47 @@
 
   <footer>aio.taskra.jp ｜ 個人開発のAIOチェッカー</footer>
 </div>
+</div>
 
 <script>
   // ===== 設定:デプロイ後に書き換えてください =====
   const WORKER_URL = "https://aio-check.mstd0520.workers.dev";
+  // アクセスコードのSHA-256ハッシュ(平文は埋め込まない)
+  const GATE_HASH_HEX = "1aa219431528a059b7f0d8ec0c7d2a6dcc0f0f659a642adc4fc1ebbd907bf983";
   // ================================================
+
+  let accessHash = sessionStorage.getItem('aioAccessHash') || '';
+
+  async function sha256Hex(text){
+    const enc = new TextEncoder().encode(text);
+    const buf = await crypto.subtle.digest('SHA-256', enc);
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function unlock(){
+    document.getElementById('gate').style.display = 'none';
+    document.getElementById('mainApp').style.display = '';
+  }
+
+  if(accessHash === GATE_HASH_HEX){
+    unlock();
+  }
+
+  document.getElementById('gateBtn').addEventListener('click', tryUnlock);
+  document.getElementById('gateInput').addEventListener('keydown', (e) => { if(e.key === 'Enter') tryUnlock(); });
+
+  async function tryUnlock(){
+    const val = document.getElementById('gateInput').value;
+    const hash = await sha256Hex(val);
+    if(hash === GATE_HASH_HEX){
+      accessHash = hash;
+      sessionStorage.setItem('aioAccessHash', hash);
+      unlock();
+    }else{
+      document.getElementById('gateError').textContent = 'コードが正しくありません。';
+      document.getElementById('gateInput').value = '';
+    }
+  }
 
   const urlInput = document.getElementById('urlInput');
   const checkBtn = document.getElementById('checkBtn');
@@ -310,6 +385,7 @@
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-Access-Hash': accessHash,
         },
         body: JSON.stringify({ url }),
       });
