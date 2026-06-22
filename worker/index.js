@@ -101,8 +101,12 @@ function parseStructural(html) {
   };
 }
 
-async function getAiFindings(url, structural, apiKey, signal) {
+async function getAiFindings(url, structural, apiKey, signal, useWebSearch = true) {
   if (!apiKey) return null;
+
+  const webSearchNote = useWebSearch
+    ? '必要であれば、このサービスのカテゴリに関する一般的な検索語でWeb検索を行い、競合や比較記事の中でこのサービスがどう扱われているか確認してください。'
+    : 'Web検索は使わず、上記の構造情報と本文のみをもとに診断してください。competitive_noteは「今回はWeb検索なしで診断しています」と記載してください。';
 
   const prompt = `あなたはWebサイトの「AIO(AI Optimization)」診断アシスタントです。
 ChatGPTやGoogleのAI検索のような生成AIに、関連する質問をしたときにこのページが紹介・引用されやすいかを診断します。
@@ -116,7 +120,7 @@ ${JSON.stringify(structural, null, 2)}
 【本文抜粋】
 ${structural.bodyTextSample}
 
-必要であれば、このサービスのカテゴリに関する一般的な検索語でWeb検索を行い、競合や比較記事の中でこのサービスがどう扱われているか確認してください。
+${webSearchNote}
 
 以下のJSON形式のみを出力してください。前置き・後置き・コードブロック記号(\`\`\`)は一切不要です。
 
@@ -132,6 +136,15 @@ ${structural.bodyTextSample}
   "competitive_note": "Web検索で分かった範囲での、競合・比較記事における位置づけについての所見"
 }`;
 
+  const reqBody = {
+    model: "claude-sonnet-4-6",
+    max_tokens: 1500,
+    messages: [{ role: "user", content: prompt }],
+  };
+  if (useWebSearch) {
+    reqBody.tools = [{ type: "web_search_20250305", name: "web_search" }];
+  }
+
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -139,12 +152,7 @@ ${structural.bodyTextSample}
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1500,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      messages: [{ role: "user", content: prompt }],
-    }),
+    body: JSON.stringify(reqBody),
     signal,
   });
 
@@ -228,22 +236,49 @@ async function handleAi(request, env) {
     return jsonResponse({ aiFindings: null });
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45000); // 45秒でタイムアウト
+  // 1回目: web_search有効(40秒タイムアウト)
+  let timedOut1 = false;
   try {
-    const aiFindings = await getAiFindings(url, structural, apiKey, controller.signal);
-    return jsonResponse({ aiFindings });
+    const controller1 = new AbortController();
+    const timer1 = setTimeout(() => controller1.abort(), 40000);
+    try {
+      const aiFindings = await getAiFindings(url, structural, apiKey, controller1.signal, true);
+      return jsonResponse({ aiFindings, usedWebSearch: true });
+    } finally {
+      clearTimeout(timer1);
+    }
   } catch (e) {
-    const timedOut = e && e.name === "AbortError";
-    return jsonResponse({
-      aiFindings: {
-        error: timedOut
-          ? "AI診断がタイムアウトしました(45秒)。もう一度お試しください。"
-          : `AI診断中にエラーが発生しました: ${String(e)}`,
-      },
-    });
-  } finally {
-    clearTimeout(timer);
+    if (e && e.name === "AbortError") {
+      timedOut1 = true;
+    } else {
+      return jsonResponse({ aiFindings: { error: `AI診断中にエラーが発生しました: ${String(e)}` } });
+    }
+  }
+
+  // 2回目: web_searchなしで自動リトライ(20秒タイムアウト)
+  if (timedOut1) {
+    try {
+      const controller2 = new AbortController();
+      const timer2 = setTimeout(() => controller2.abort(), 20000);
+      try {
+        const aiFindings = await getAiFindings(url, structural, apiKey, controller2.signal, false);
+        // リトライ成功: competitive_noteにweb_search未使用の旨を追記
+        if (aiFindings && !aiFindings.error) {
+          aiFindings.competitive_note = '(今回は時間の都合でWeb検索なしで診断しました。競合情報は別途ご確認ください。)';
+        }
+        return jsonResponse({ aiFindings, usedWebSearch: false });
+      } finally {
+        clearTimeout(timer2);
+      }
+    } catch (e2) {
+      return jsonResponse({
+        aiFindings: {
+          error: e2 && e2.name === "AbortError"
+            ? "AI診断がタイムアウトしました。しばらく時間をおいて再試行してください。"
+            : `AI診断中にエラーが発生しました: ${String(e2)}`,
+        },
+      });
+    }
   }
 }
 
