@@ -229,7 +229,7 @@ async function handleAi(request, env) {
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25000); // 25秒でタイムアウト
+  const timer = setTimeout(() => controller.abort(), 45000); // 45秒でタイムアウト
   try {
     const aiFindings = await getAiFindings(url, structural, apiKey, controller.signal);
     return jsonResponse({ aiFindings });
@@ -238,7 +238,7 @@ async function handleAi(request, env) {
     return jsonResponse({
       aiFindings: {
         error: timedOut
-          ? "AI診断がタイムアウトしました(25秒)。もう一度お試しください。"
+          ? "AI診断がタイムアウトしました(45秒)。もう一度お試しください。"
           : `AI診断中にエラーが発生しました: ${String(e)}`,
       },
     });

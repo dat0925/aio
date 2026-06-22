@@ -318,7 +318,7 @@
     document.getElementById('gaugeStatus').textContent = '構造解析 完了';
     document.getElementById('gaugeStatus').className = 'gauge-status';
     document.getElementById('gaugeScore').textContent = '-';
-    document.getElementById('summaryText').innerHTML = '<span class="pulse"></span>AIが所見・推奨施策を作成しています(10〜20秒ほどかかります)…';
+    document.getElementById('summaryText').innerHTML = '<span class="pulse"></span>AIが所見・推奨施策を作成しています(最大40秒ほどかかることがあります)…';
     document.getElementById('aiDisabledNote').style.display = 'none';
 
     const st = data.structural || {};
@@ -432,7 +432,7 @@
     }
 
     try{
-      const r2 = await fetchJson('/ai', { url, structural: structuralData.structural }, 30000);
+      const r2 = await fetchJson('/ai', { url, structural: structuralData.structural }, 55000);
       if(!r2.ok){
         showAiUnavailable((r2.data && r2.data.error) ? r2.data.error : 'AI所見の生成に失敗しました。');
       }else{
